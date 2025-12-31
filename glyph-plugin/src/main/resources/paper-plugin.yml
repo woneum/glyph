@@ -1,0 +1,4 @@
+name: 'Glyph'
+version: '${version}'
+main: 'io.github.woneum.glyph.plugin.GlyphPlugin'
+api-version: '${paperVersion}'
