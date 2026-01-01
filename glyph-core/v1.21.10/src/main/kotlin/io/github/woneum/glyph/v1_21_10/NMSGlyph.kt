@@ -2,6 +2,7 @@ package io.github.woneum.glyph.v1_21_10
 
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.ArgumentType
+import com.mojang.brigadier.arguments.BoolArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.builder.ArgumentBuilder
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
@@ -13,8 +14,10 @@ import com.mojang.brigadier.tree.RootCommandNode
 import io.github.woneum.glyph.CommandDefinition
 import io.github.woneum.glyph.CommandToken
 import io.github.woneum.glyph.Glyph
+import io.github.woneum.glyph.GlyphContext
 import io.github.woneum.glyph.GlyphScanner
 import io.github.woneum.glyph.argument.ArgumentRegistry
+import io.github.woneum.glyph.v1_21_10.argument.NMSGlyphArgument
 import net.minecraft.commands.CommandSourceStack
 import net.minecraft.commands.Commands
 import net.minecraft.server.MinecraftServer
@@ -36,6 +39,7 @@ class NMSGlyph : Glyph {
     private val root: RootCommandNode<CommandSourceStack> = dispatcher.root
 
     private val commandMap = Bukkit.getCommandMap()
+
     override fun compute(plugin: JavaPlugin, vararg handlers: Any) {
         Bukkit.getPluginManager().registerEvents(PlayerListener(this), plugin)
 
@@ -65,12 +69,14 @@ class NMSGlyph : Glyph {
         var current: ArgumentBuilder<CommandSourceStack, *>? = null
 
         for (token in def.tokens.asReversed()) {
+            var glyphContext: NMSGlyphContext? = null
             current = when (token) {
                 is CommandToken.Literal -> {
                     if (current == null) {
                         literal(token.value).also {
                             it.executes { context ->
-                                invoke(def, context)
+                                glyphContext = NMSGlyphContext(context.source.bukkitSender, context)
+                                invoke(def, glyphContext)
                                 1
                             }
                         }
@@ -78,34 +84,57 @@ class NMSGlyph : Glyph {
                         literal(token.value).then(current)
                     }
                 }
-                else -> error("not implemented")
+                is CommandToken.Argument -> {
+                    if (current == null) {
+                        val arg = ArgumentRegistry.get(token.value) as NMSGlyphArgument<*>
+                        argument(token.value, arg.type).also {
+                            it.suggests { context, builder ->
+                                glyphContext = NMSGlyphContext(context.source.bukkitSender, context)
+                                arg.listSuggestions(glyphContext, builder)
+                            }
+                            it.executes { context ->
+                                 invoke(def, glyphContext!!)
+                                1
+                            }
+                        }
+                    } else {
+                        val arg = ArgumentRegistry.get(token.value) as NMSGlyphArgument<*>
+                        argument(token.value, arg.type).also {
+                            it.suggests { context, builder ->
+                                glyphContext = NMSGlyphContext(context.source.bukkitSender, context)
+                                arg.listSuggestions(glyphContext, builder)
+                            }
+                            it.then(current)
+                        }
+                    }
+                }
             }
         }
 
         return current!!
     }
 
-    private fun invoke(def: CommandDefinition, ctx: CommandContext<CommandSourceStack>) {
+    private fun invoke(def: CommandDefinition, glyphContext: NMSGlyphContext) {
         val method = def.method
         val params = method.parameters
         val args = ArrayList<Any>()
 
-        for (param in params) {
-            when {
-                CommandSender::class.java.isAssignableFrom(param.type) -> {
-                    args += ctx.source.bukkitSender
-                }
+        var argIndex = 0
 
-                Player::class.java.isAssignableFrom(param.type) -> {
-                    val sender = ctx.source.bukkitSender
-                    require(sender is Player) { "Player only command" }
-                    args += sender
-                }
+        for ((index, param) in params.withIndex()) {
+            if (index == 0 && CommandSender::class.java.isAssignableFrom(param.type)) {
+                args += glyphContext.sender
+            } else if (GlyphContext::class.java.isAssignableFrom(param.type)) {
+                args += glyphContext
+            } else {
+                val token = def.tokens.filterIsInstance<CommandToken.Argument>().getOrNull(argIndex) ?: error("Too many parameters for command")
 
-                else -> {
-                    //Argument Token 실행
-                    val name = param.name
-                }
+                val glyphArg = ArgumentRegistry.get(token.value)
+
+                @Suppress("UNCHECKED_CAST")
+                args += (glyphArg as NMSGlyphArgument<Any>).from(glyphContext, token.value)
+
+                argIndex++
             }
         }
 

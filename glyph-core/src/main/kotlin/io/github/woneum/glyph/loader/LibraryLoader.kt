@@ -18,7 +18,7 @@ object LibraryLoader {
         if (lastDot > 0) {
             val superPackageName = packageName.substring(0, lastDot)
             val subPackageName = packageName.substring(lastDot + 1)
-            candidates.add("$superPackageName$libraryVersion$subPackageName$className")
+            candidates.add("$superPackageName.$libraryVersion.$subPackageName.$className")
         }
 
         return try {
